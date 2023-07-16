@@ -1,12 +1,49 @@
+import math
+import random
+import sys
+
+
 class InputHandler:
+    def __init__(self):
+        self.valid_args = {
+            'w': 'width',
+            'h': 'height',
+            'width': 'width',
+            'height': 'height',
+            's': 'seed',
+            'seed': 'seed',
+            'lucid': 'lucid',
+            'steps': 'steps',
+            'g': 'guidance_scale',
+            'guidance_scale': 'guidance_scale',
+            'num_images': 'num_images',
+            'n': 'num_images',
+            'negative_prompt': 'negative_prompt',
+        }
 
     def sanitize_input(self, message):
         split_message = message.split('--')
         prompt = split_message[0].strip()
-        user_args = ['--' + arg.strip() for arg in split_message[1:]]
-        return prompt, user_args
 
-    def process_args(self, user_args):
-        allowed_args = ['--W', '--H', '--seed']
-        validated_args = [arg for arg in user_args if any(allowed_arg in arg for allowed_arg in allowed_args)]
-        return validated_args
+        options_map = {}
+        for arg in split_message[1:]:
+            split_arg = arg.strip().split(' ')
+            if len(split_arg) > 1:
+                translated_arg = self.translate_arg(split_arg[0])
+
+                if translated_arg is not None:
+                    options_map[split_arg[0]] = split_arg[1]
+            else:
+                options_map[split_arg[0]] = None
+
+        if 'seed' not in options_map:
+            options_map['seed'] = random.Random().randint(0, sys.maxsize)
+
+        return prompt, options_map
+
+    def translate_arg(self, arg_name: str) -> str:
+        arg_name = arg_name.lower()
+        if arg_name in self.valid_args:
+            return self.valid_args[arg_name]
+
+        return None

@@ -18,12 +18,13 @@ class ImageServer:
     async def process_request(self, websocket):
         print("Waiting for request")
         request = await websocket.recv()
-        prompt, actor_id = request.split('|', 1)
+        request_data = json.loads(request)
+        prompt, actor_id, options = request_data['prompt'], request_data['actor_id'], request_data['options']
 
-        print(f"Received prompt: {prompt} for actor: {actor_id}")
+        print(f"Received prompt: {prompt} for actor: {actor_id} with options: {options}")
 
         print("Generating images")
-        generated_images = self.image_generator.generate(prompt, websocket)
+        generated_images = self.image_generator.generate(prompt, websocket, options)
         print("Images generated")
 
         print("Sending progress update")
@@ -44,7 +45,10 @@ class ImageServer:
             generated_image_paths.append(image_path)
 
         print("Sending image paths")
-        await websocket.send(json.dumps(generated_image_paths))
+        await websocket.send(json.dumps({
+            'image_paths': generated_image_paths,
+            'options': options,
+            }))
 
     def save_generated_image(self, generated_image, actor_dir):
         filename = f"{datetime.datetime.utcnow().isoformat()}-{str(uuid.uuid4())}.png"
@@ -55,7 +59,7 @@ class ImageServer:
 
     def run(self):
         print("Starting server")
-        start_server = websockets.serve(self.process_request, "0.0.0.0", self.port)
+        start_server = websockets.serve(self.process_request, "0.0.0.0", self.port, ping_interval=30, ping_timeout=60*5)
 
         print("Entering main event loop")
         asyncio.get_event_loop().run_until_complete(start_server)
