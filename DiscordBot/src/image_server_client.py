@@ -1,6 +1,6 @@
-import websockets as websockets
+import json
 
-from web_socket_context_manager import WebSocketContextManager
+import websockets as websockets
 
 
 class ImageServerClient:
@@ -8,10 +8,10 @@ class ImageServerClient:
         self.host = host
         self.port = port
 
-    async def send_request(self, prompt, actor_id):
+    async def send_request(self, message, actor_id, options):
         try:
             websocket = await websockets.connect(f"ws://{self.host}:{self.port}")
-            await websocket.send(f"{prompt}|{actor_id}")
+            await websocket.send(json.dumps({'prompt': message, 'actor_id': actor_id, 'options': options}))
             return websocket
         except ConnectionRefusedError:
             raise ConnectionRefusedError("Image server is not running. Please start the image server before running "

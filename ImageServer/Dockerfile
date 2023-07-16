@@ -24,6 +24,7 @@ RUN python3 -m pip install diffusers --upgrade invisible_watermark transformers 
 RUN python3 -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu117
 RUN python3 -m pip install python-dotenv
 RUN python3 -m pip install xformers -U
+RUN python3 -m pip install --upgrade "jax[cuda12_pip]" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy necessary files only, use .dockerignore for excluding unnecessary files
