@@ -1,0 +1,40 @@
+version: "3.10"
+services:
+  discordbot:
+    build:
+      context: ./DiscordBot
+      dockerfile: Dockerfile
+    volumes:
+      - ./DiscordBot:/DiscordBot
+      - ./generated_images:/DiscordBot/generated_images
+      - ./DiscordBot/src:/src
+    environment:
+      - IMAGE_SERVER_HOST=imageserver
+      - IMAGE_SERVER_PORT=5678
+    env_file:
+      - ./DiscordBot/.env
+    depends_on:
+      - imageserver
+
+  imageserver:
+    tty: true
+    build:
+      context: ./ImageServer
+      dockerfile: Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./ImageServer:/ImageServer
+      - ./generated_images:/ImageServer/generated_images
+      - ./ImageServer/src:/ImageServer/src
+    ports:
+      - "5678:5678"
+    environment:
+      - IMAGE_SERVER_PORT=5678
+    env_file:
+      - ./ImageServer/.env

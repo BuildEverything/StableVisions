@@ -1,0 +1,5 @@
+DiscordBot/.env
+ImageServer/.env
+ImageServer/cache/
+ImageServer/generative-models/
+generated_images/
