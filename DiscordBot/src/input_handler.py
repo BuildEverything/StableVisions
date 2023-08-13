@@ -19,6 +19,8 @@ class InputHandler:
             'num_images': 'num_images',
             'n': 'num_images',
             'negative_prompt': 'negative_prompt',
+            'frames': 'num_frames',
+            'f': 'num_frames',
         }
 
     def sanitize_input(self, message):
@@ -27,7 +29,7 @@ class InputHandler:
 
         options_map = {}
         for arg in split_message[1:]:
-            split_arg = arg.strip().split(' ')
+            split_arg = arg.strip().split(' ', 1)
             if len(split_arg) > 1:
                 translated_arg = self.translate_arg(split_arg[0])
 

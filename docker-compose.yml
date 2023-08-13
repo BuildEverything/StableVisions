@@ -7,10 +7,17 @@ services:
     volumes:
       - ./DiscordBot:/DiscordBot
       - ./generated_images:/DiscordBot/generated_images
+      - ./generated_videos:/DiscordBot/generated_videos
       - ./DiscordBot/src:/src
     environment:
       - IMAGE_SERVER_HOST=imageserver
       - IMAGE_SERVER_PORT=5678
+      - MIRAGE_SERVER_HOST=mirageserver
+      - MIRAGE_SERVER_PORT=5778
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_USERNAME=redis
+      - REDIS_PASSWORD=redis
     env_file:
       - ./DiscordBot/.env
     depends_on:
@@ -38,3 +45,36 @@ services:
       - IMAGE_SERVER_PORT=5678
     env_file:
       - ./ImageServer/.env
+
+  mirageserver:
+    tty: true
+    build:
+      context: ./MirageServer
+      dockerfile: Dockerfile
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    volumes:
+      - ./MirageServer:/MirageServer
+      - ./generated_videos:/MirageServer/generated_videos
+      - ./MirageServer/src:/MirageServer/src
+    ports:
+      - "5778:5778"
+    environment:
+      - MIRAGE_SERVER_PORT=5778
+    env_file:
+      - ./MirageServer/.env
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    environment:
+      - REDIS_PASSWORD=redis
+      - REDIS_DATABASES=2
+    volumes:
+        - ./redis:/data

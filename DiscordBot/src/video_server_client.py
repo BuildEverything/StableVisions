@@ -3,7 +3,7 @@ import json
 import websockets as websockets
 
 
-class ImageServerClient:
+class VideoServerClient:
     def __init__(self, host, port):
         self.host = host
         self.port = port
@@ -14,5 +14,5 @@ class ImageServerClient:
             await websocket.send(json.dumps({'prompt': message, 'actor_id': actor_id, 'options': options}))
             return websocket
         except ConnectionRefusedError:
-            raise ConnectionRefusedError("Image server is not running. Please start the image server before running "
+            raise ConnectionRefusedError("Video server is not running. Please start the video server before running "
                                          "the bot.")

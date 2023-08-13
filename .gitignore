@@ -1,3 +1,29 @@
+# .gitignore for Enchantus
+
+# ImageServer
 ImageServer/cache/
 ImageServer/generative-models/
+
+# MirageServer
+MirageServer/cache/
+MirageServer/src/__pycache__/
+
+# Generated files
 generated_images/
+generated_videos/
+
+# Redis local cache
+redis/
+
+# DiscordBot
+DiscordBot/src/__pycache__/
+DiscordBot/src/__pycache__/*.pyc
+
+# Google Cloud credentials
+DiscordBot/enchantus-service-account-creds.json
+DiscordBot/local-service-account-creds.json
+DiscordBot/prod-service-account-creds.json
+DiscordBot/token.json
+
+# IDE files
+.idea/

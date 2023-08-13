@@ -4,13 +4,14 @@ import sys
 
 import torch
 from PIL import Image
-from diffusers import DiffusionPipeline
+from diffusers import DiffusionPipeline, DPMSolverMultistepScheduler
+from numpy import ndarray
 from tqdm import tqdm
 
 from manage_safety_checker import disable_safety_checker
 
 
-class ImageGenerator:
+class MirageGenerator:
     def __init__(self, auth_token, cache_dir="cache", use_cuda=True, disable_safety_checker_flag=True):
         self.auth_token = auth_token
         self.cache_dir = cache_dir
@@ -29,12 +30,14 @@ class ImageGenerator:
 
     def __init_diffusion_pipe(self, use_cuda, disable_safety_checker_flag):
         print("Initializing Diffusion Pipeline")
-        self.pipe = DiffusionPipeline.from_pretrained("stabilityai/stable-diffusion-xl-base-0.9",
+        self.pipe = DiffusionPipeline.from_pretrained("cerspense/zeroscope_v2_576w",
                                                       use_auth_token=self.auth_token,
                                                       cache_dir=self.cache_dir,
                                                       torch_dtype=torch.float16,
                                                       use_safetensors=False,
                                                       variant="fp16")
+
+        self.pipe.scheduler = DPMSolverMultistepScheduler.from_config(self.pipe.scheduler.config)
 
         if use_cuda:
             print("Using CUDA")
@@ -44,8 +47,9 @@ class ImageGenerator:
             self.pipe.enable_model_cpu_offload()
 
         # if using torch < 2.0
-        print("Enabling memory efficient attention")
-        self.pipe.enable_xformers_memory_efficient_attention()
+        #print("Enabling memory efficient attention")
+        #self.pipe.enable_xformers_memory_efficient_attention()
+        self.pipe.enable_vae_slicing()
 
         if disable_safety_checker_flag:
             print("Disabling safety checker")
@@ -68,17 +72,17 @@ class ImageGenerator:
         else:
             raise ValueError("Either `total` or `iterable` has to be defined.")
 
-    async def generate(self, prompt, websocket, options) -> [Image]:
-        print(f"Generating image for prompt: {prompt}")
+    def generate(self, prompt, options):
+        print(f"Generating mirage for prompt: {prompt}")
         self.pipe.progress_bar = self.progress_bar
         self.pipe.set_progress_bar_config(dynamic_ncols=False)
 
-        height = self.pipe.unet.config.sample_size * self.pipe.vae_scale_factor
-        width = self.pipe.unet.config.sample_size * self.pipe.vae_scale_factor
-        steps = 50
+        height = 320
+        width = 576
+        steps = 150
         guidance_scale = 7.5
         rng_seed = 0
-        num_images = 1
+        num_frames = 36
         negative_prompt = None
 
         print("Using options: ", options)
@@ -95,11 +99,11 @@ class ImageGenerator:
             except ValueError:
                 print(f"Steps '{options['steps']}' must be an integer")
 
-        if 'guidace_scale' in options:
+        if 'guidance_scale' in options:
             try:
-                guidance_scale = float(options['guidace_scale'])
+                guidance_scale = float(options['guidance_scale'])
             except ValueError:
-                print(f"Guidance scale '{options['guidace_scale']}' must be a float")
+                print(f"Guidance scale '{options['guidance_scale']}' must be a float")
 
         if 'seed' in options:
             try:
@@ -107,26 +111,26 @@ class ImageGenerator:
             except ValueError:
                 print(f"Seed '{options['seed']}' must be an integer")
 
-        if 'num_images' in options:
+        if 'num_frames' in options:
             try:
-                num_images = int(options['num_images'])
+                num_frames = int(options['num_frames'])
             except ValueError:
-                print(f"Number of images '{options['num_images']}' must be an integer")
+                print(f"Number of frames '{options['num_frames']}' must be an integer")
 
         if 'negative_prompt' in options:
             negative_prompt = options['negative_prompt']
 
         generator = torch.Generator(device="cuda").manual_seed(rng_seed)
 
-        generated_images = self.pipe(
+        generated_video_frames = self.pipe(
             prompt=prompt,
             height=height,
             width=width,
             num_inference_steps=steps,
             guidance_scale=guidance_scale,
             generator=generator,
-            num_images_per_prompt=num_images,
-            negative_prompt=negative_prompt
-        ).images
-        print("Image generation complete")
-        return generated_images
+            num_frames=num_frames,
+            #negative_prompt=negative_prompt
+        ).frames
+        print("Video generation complete")
+        return generated_video_frames

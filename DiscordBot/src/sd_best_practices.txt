@@ -1,4 +1,4 @@
-A good prompt needs to be detailed and specific. A good process is to look through a list of keyword categories and
+          A good prompt needs to be detailed and specific. A good process is to look through a list of keyword categories and
 decide whether you want to use any of them. A good prompt is a series of comma separated keywords or small key phrases.
 The prompt should not be in the form of sentences, but in the form of indicators which help Stable Diffusion
 to select the right samples.
