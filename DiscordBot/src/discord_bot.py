@@ -1,23 +1,17 @@
 import asyncio
-import datetime
-import gc
-import io
 import json
 import logging
 import os.path
 import time
-import redis
 
 import boto3
 import discord
 import openai
-from discord import Intents, File, ChannelType
+from discord import Intents, File
 from discord.ext import commands
-# from tqdm.contrib.discord import tqdm, trange
 
-from dreamer import Dreamer
+from dream_server_client import DreamServerClient
 from hallucination import Hallucination
-from image_server_client import ImageServerClient
 from input_handler import InputHandler
 from video_server_client import VideoServerClient
 
@@ -39,12 +33,14 @@ class DiscordBot:
         self.discord_api_token = discord_auth_token
         openai.api_key = openai_api_token
         self.youtube_credentials_file = youtube_credentials_file
-        self.image_server = ImageServerClient(image_server_host, image_server_port)
+        self.redis = redis_client
+        self.dream_server_client = DreamServerClient(redis=self.redis, host=image_server_host, port=image_server_port)
+        # self.mirage_server_client = MirageServerClient(video_server_host, video_server_port)
         self.video_server = VideoServerClient(video_server_host, video_server_port)
         self.aws_access_key_id = aws_access_key_id
         self.aws_secret_access_key = aws_secret_access_key
         self.dreamers = {}
-        self.redis_client = redis_client
+
         self.bot = commands.Bot(command_prefix='/',
                                 intents=intents,
                                 description='A bot that generates images from text prompts using the Stable Diffusion '
@@ -98,141 +94,33 @@ class DiscordBot:
             await self.generate_video(ctx, prompt, ctx.message.author.id, options)
             await self.mark_message_processing_complete(ctx.message)
 
-    async def handle_rp_message(self, message):
-        if message.author == self.bot.user:
-            return
-
-        await self.mark_message_processing(message)
-
-        game_id = message.channel.id
-        if game_id not in self.dreamers:
-            self.dreamers[game_id] = Dreamer(game_id, 0.9)
-
-        dreamer = self.dreamers[message.channel.id]
-
-        explanation, message_to_players_header, message_to_players = dreamer.run(message.author.id, message.content)
-
-        await message.channel.send(f'**{message_to_players_header}** \n{message_to_players}\n')
-
-        debug_thread = await message.channel.create_thread(
-            name="Dreamer [Debug]",
-            type=ChannelType.public_thread
-        )
-
-        await debug_thread.send(
-            f"**Explanation:** \n{explanation}\n\n"
-            f"**Metadata:** \n{json.dumps(dreamer.meta_information)}\n\n"
-            f"**World State Update:** \n{json.dumps(dreamer.world_state_update)}\n\n"
-            f"**World State:** \n{json.dumps(dreamer.world_state.state)}\n\n"
-        )
-
-        await self.mark_message_processing_complete(message)
-
     def run(self):
         self.bot.run(self.discord_api_token)
 
     async def generate_image(self, ctx, prompt, actor_id, options):
-        steps = 50
-        if 'steps' in options:
-            steps = int(options['steps'])
+        steps = int(options['steps']) if 'steps' in options else None
+        formatted_eta = self.dream_server_client.calc_formatted_eta(steps)
+        status_message = await ctx.send(f'Dream generation started... (ETA: {formatted_eta})')
 
-        try:
-            generation_start_time = time.time()
-            websocket = await self.image_server.send_request(prompt, actor_id, options)
+        image_paths = await self.dream_server_client.send_request(prompt, actor_id, options)
+        await status_message.edit(content=f'Dream generation complete.')
 
-            _, formatted_avg_duration = self.calc_formatted_avg_duration("dream_avg_seconds_per_step", steps)
-            status_message = await ctx.send(
-                f'Dream generation started... (ETA: {formatted_avg_duration})')
+        logging.debug(f'send image(s) to user')
+        for image_path in image_paths:
+            options_string = " ".join(f'--{k} {v}' for k, v in options.items() if k != 'lucid')
+            repro_str = f'{prompt} {options_string}'
+            await ctx.message.reply(
+                embed=discord.Embed(
+                    title=f'`id: {image_path}`',
+                    description=f'`seed: {options["seed"]}`\n'
+                                f'`repro: {repro_str}`\n'
+                ),
+                file=File(image_path),
+                mention_author=True,
+            )
 
-            # avg_seconds_per_step, progress_indicator = await self.create_progress_indicator_task(
-            #     status_message,
-            #     'Dream generation in progress.',
-            #     'dream_avg_seconds_per_step',
-            #     steps
-            # )
-
-            async for message in websocket:
-                response = json.loads(message)
-
-                if response['type'] == 'progress':
-                    progress_percentage = float(response['percentage'])
-                    await status_message.edit(content=f'Dream generation progress: {progress_percentage:.2f}%')
-
-                elif response['type'] == 'complete':
-                    image_paths = response['image_paths']
-                    logging.debug(f'image_paths: {image_paths}')
-
-                    generation_total_time = time.time() - generation_start_time
-                    generation_seconds_per_step = generation_total_time / steps
-                    logging.debug(f'generation_seconds_per_step: {generation_seconds_per_step}')
-
-                    logging.debug(f'update_generative_task_metrics')
-                    await self.update_generative_task_metrics(
-                        'dream_record_count',
-                        'dream_avg_seconds_per_step',
-                        generation_seconds_per_step,
-                        generation_total_time)
-
-                    # logging.debug(f'cancel progress_indicator')
-                    # if not progress_indicator.done():
-                    #     progress_indicator.cancel()
-
-                    logging.debug(f'edit status_message')
-                    try:
-                        await status_message.edit(content='Image generation completed!')
-                    except Exception as e:
-                        logging.error(f"Error editing status message: {e}")
-
-                    logging.debug(f'send image(s) to user')
-                    for image_path in image_paths:
-                        options_string = " ".join(f'--{k} {v}' for k, v in options.items() if k != 'lucid')
-                        repro_str = f'{prompt} {options_string}'
-                        await ctx.message.reply(
-                            file=File(image_path),
-                            mention_author=True,
-                            content=f'**Serving up a hot new image fresh out of the oven!** \n'
-                                    f'`id: {image_path}`\n'
-                                    f'`seed: {options["seed"]}`\n'
-                                    f'`repro: {repro_str}`\n'
-                        )
-
-                    logging.debug(f'delete status_message')
-                    await status_message.delete()
-                    break
-
-            logging.debug(f'close websocket')
-            await websocket.close()
-
-        except Exception as e:
-            logging.error(f'Error generating dream: {e}')
-            await ctx.message.reply(f'Error generating dream: {e}')
-
-    # @staticmethod
-    # async def spinner_task(current_progress, status_message):
-    #     try:
-    #         logging.debug('Spinner task started!')
-
-    #         frame_duration = 1 / 24  # 24 frames per second
-
-    #         buffer = io.StringIO()
-    #         previous_progress = 0  # Track the previous progress
-
-    #         # tqdm will write its output to the buffer
-    #         with tqdm(total=100, file=buffer) as pbar:
-    #             while True:
-    #                 progress_diff = current_progress[0] - previous_progress
-    #                 if progress_diff > 0:
-    #                     pbar.update(progress_diff)
-    #                     buffer.seek(0)
-    #                     progress_string = buffer.readline().strip()
-    #                     previous_progress = current_progress[0]  # Update the previous progress after updating the bar
-
-    #                 logging.debug(f'Progress string: {progress_string}')
-    #                 await status_message.edit(content=f'Mirage generation in progress... {progress_string}')
-    #                 await asyncio.sleep(frame_duration)  # Sleep for 1/24 seconds to achieve 24 FPS
-
-    #     except Exception as e:
-    #         logging.error(f'Spinner task encountered an error: {e}')
+        logging.debug(f'delete status_message')
+        await status_message.delete()
 
     @staticmethod
     async def in_progress_indicator_task(status_message,
@@ -359,17 +247,17 @@ class DiscordBot:
                                              metric_avg_seconds_per_step_key,
                                              avg_seconds_per_step,
                                              generation_seconds_per_step):
-        mirage_record_count = self.redis_client.get(metric_record_count_key)
+        mirage_record_count = self.redis.get(metric_record_count_key)
         if mirage_record_count is None:
             mirage_record_count = 0
         else:
             mirage_record_count = int(mirage_record_count)
         mirage_record_count += 1
-        self.redis_client.set(metric_record_count_key, mirage_record_count)
+        self.redis.set(metric_record_count_key, mirage_record_count)
         sma_existing_record_section = (avg_seconds_per_step * (mirage_record_count - 1)) / mirage_record_count
         sma_existing_record_section += generation_seconds_per_step / mirage_record_count
         sma_existing_record_section /= mirage_record_count
-        self.redis_client.set(metric_avg_seconds_per_step_key, sma_existing_record_section)
+        self.redis.set(metric_avg_seconds_per_step_key, sma_existing_record_section)
 
     async def create_progress_indicator_task(self,
                                              status_message,
@@ -390,22 +278,6 @@ class DiscordBot:
         #                  '⣯⣿' '⣟⣿' '⣿⣻' '⣿⣽'
 
         return avg_seconds_per_step, progress_indicator
-
-    def calc_formatted_avg_duration(self, avg_seconds_key, steps):
-        avg_seconds_per_step = self.redis_client.get(avg_seconds_key)
-        if avg_seconds_per_step is None:
-            avg_seconds_per_step = 0
-        else:
-            avg_seconds_per_step = float(avg_seconds_per_step)
-
-        def format_timedelta(td):
-            minutes, seconds = divmod(td.seconds, 60)
-            hours, minutes = divmod(minutes, 60)
-            return f"{hours:02}:{minutes:02}:{seconds:02}"
-
-        avg_seconds_per_step_delta = datetime.timedelta(seconds=(avg_seconds_per_step * steps))
-        formatted_time = format_timedelta(avg_seconds_per_step_delta)
-        return avg_seconds_per_step, formatted_time
 
     async def mark_message_processing_complete(self, message):
         await message.remove_reaction('⏳', self.bot.user)

@@ -68,7 +68,7 @@ class ImageGenerator:
         else:
             raise ValueError("Either `total` or `iterable` has to be defined.")
 
-    async def generate(self, prompt, websocket, options) -> [Image]:
+    def generate(self, prompt, websocket, options) -> [Image]:
         print(f"Generating image for prompt: {prompt}")
         self.pipe.progress_bar = self.progress_bar
         self.pipe.set_progress_bar_config(dynamic_ncols=False)

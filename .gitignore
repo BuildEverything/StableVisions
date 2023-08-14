@@ -2,6 +2,7 @@
 
 # ImageServer
 ImageServer/cache/
+ImageServer/src/__pycache__/
 ImageServer/generative-models/
 
 # MirageServer
