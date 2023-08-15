@@ -1,44 +1,29 @@
 import asyncio
-import json
 import logging
 import os.path
-import time
 
-import boto3
 import discord
-import openai
 from discord import Intents, File
 from discord.ext import commands
 
 from dream_server_client import DreamServerClient
 from hallucination import Hallucination
 from input_handler import InputHandler
-from video_server_client import VideoServerClient
+from mirage_server_client import MirageServerClient
 
 
 class DiscordBot:
     def __init__(self,
-                 discord_auth_token,
-                 openai_api_token,
-                 youtube_credentials_file,
-                 image_server_host,
-                 image_server_port,
-                 video_server_host,
-                 video_server_port,
-                 aws_access_key_id,
-                 aws_secret_access_key,
-                 redis_client):
+                 discord_auth_token: str,
+                 dream_server_client: DreamServerClient,
+                 mirage_server_client: MirageServerClient):
         intents = Intents.default()
         intents.message_content = True
         self.discord_api_token = discord_auth_token
-        openai.api_key = openai_api_token
-        self.youtube_credentials_file = youtube_credentials_file
-        self.redis = redis_client
-        self.dream_server_client = DreamServerClient(redis=self.redis, host=image_server_host, port=image_server_port)
-        # self.mirage_server_client = MirageServerClient(video_server_host, video_server_port)
-        self.video_server = VideoServerClient(video_server_host, video_server_port)
-        self.aws_access_key_id = aws_access_key_id
-        self.aws_secret_access_key = aws_secret_access_key
+
+        self.dream_server_client = dream_server_client
+        self.mirage_server_client = mirage_server_client
+
         self.dreamers = {}
 
         self.bot = commands.Bot(command_prefix='/',
@@ -149,135 +134,78 @@ class DiscordBot:
                 break
 
     async def generate_video(self, ctx, prompt, actor_id, options):
-        steps = options.get('steps', 150)
-        _, formatted_avg_duration = self.calc_formatted_avg_duration("mirage_avg_seconds_per_step", steps)
-        status_message = await ctx.send(f'Mirage generation started... (ETA: {formatted_avg_duration})')
+        steps = int(options['steps']) if 'steps' in options else None
+        formatted_eta = self.dream_server_client.calc_formatted_eta(steps)
+        status_message = await ctx.send(f'Mirage generation started... (ETA: {formatted_eta})')
 
-        try:
-            generation_start_time = time.time()
-            websocket = await self.video_server.send_request(prompt, actor_id, options)
+        mirage_path = await self.mirage_server_client.send_request(prompt, actor_id, options)
 
-            current_progress = [0]
+        # avg_seconds_per_step, progress_indicator = await self.create_progress_indicator_task(
+        #     status_message,
+        #     'Mirage generation in progress.',
+        #     'mirage_avg_seconds_per_step',
+        #     steps
+        # )
 
-            # avg_seconds_per_step, progress_indicator = await self.create_progress_indicator_task(
-            #     status_message,
-            #     'Mirage generation in progress.',
-            #     'mirage_avg_seconds_per_step',
-            #     steps
-            # )
+        # progress_indicator.cancel()
 
-            async for packet in websocket:
-                response = json.loads(packet)
+        await status_message.edit(content='Uploading your mirage to the cloud...')
 
-                response_type = response['type']
-                if response_type == 'progress':
-                    progress_percentage = float(response['percentage'])
-                    current_progress[0] = progress_percentage
-                    continue
+        video_url, upload_succeeded = self.mirage_server_client.upload_mirage(actor_id=actor_id,
+                                                                              mirage_path=mirage_path)
 
-                elif response_type == 'complete':
-                    generation_total_time = time.time() - generation_start_time
-                    generation_seconds_per_step = generation_total_time / steps
+        if not upload_succeeded:
+            await status_message.edit(
+                content=f'Mirage upload failed! Ask for help retrieving your mirage, {mirage_path}')
+            return
 
-                    await self.update_generative_task_metrics(
-                        'mirage_record_count',
-                        'mirage_avg_seconds_per_step',
-                        generation_seconds_per_step,
-                        generation_total_time)
+        video_file = None
+        if os.stat(mirage_path).st_size < 8 * 1024 * 1024:
+            video_file_path = self.mirage_server_client.convert_to_webm(mirage_path)
+            video_file = File(video_file_path)
 
-                    # progress_indicator.cancel()
+        await status_message.edit(content='Mirage generation completed!')
 
-                    # Here I assume that the received message is a serialized list (JSON)
-                    mirage_path = response['mirage_path']
+        options_string = " ".join(f'--{k} {v}' for k, v in options.items() if k != 'lucid')
+        repro_str = f'{prompt} {options_string}'
 
-                    await status_message.edit(content='Uploading your mirage to the cloud...')
+        embedding = discord.Embed(
+            title=os.path.basename(mirage_path),
+            description=prompt,
+            url=video_url,
+        )
 
-                    boto_client = boto3.client('s3',
-                                               aws_access_key_id=self.aws_access_key_id,
-                                               aws_secret_access_key=self.aws_secret_access_key)
+        await ctx.message.reply(
+            file=video_file,
+            embed=embedding,
+            mention_author=True,
+            content=f'**What will your mirage show? Observe.** \n'
+                    f'`id: {mirage_path}`\n'
+                    f'`seed: {options["seed"]}`\n'
+                    f'`repro: {repro_str}`\n'
+        )
 
-                    video_object_key = f'{actor_id}_{os.path.basename(mirage_path)}'
+        await status_message.delete()
 
-                    upload_succeeded = True
-                    try:
-                        boto_client.upload_file(
-                            mirage_path,
-                            'enchantus-visions-mirage-bucket',
-                            video_object_key)
-                    except Exception as e:
-                        logging.error(f'Error uploading mirage to S3: {e}')
-                        upload_succeeded = False
-
-                    if not upload_succeeded:
-                        await status_message.edit(
-                            content=f'Mirage upload failed! Ask for help retrieving your mirage, {mirage_path}')
-                        return
-
-                    await status_message.edit(content='Mirage generation completed!')
-
-                    video_url = f'https://enchantus-visions-mirage-bucket.s3.amazonaws.com/{video_object_key}'
-                    options_string = " ".join(f'--{k} {v}' for k, v in options.items() if k != 'lucid')
-                    repro_str = f'{prompt} {options_string}'
-
-                    embedding = discord.Embed(
-                        title=video_object_key,
-                        description=prompt,
-                        url=video_url,
-                    )
-
-                    await ctx.message.reply(
-                        embed=embedding,
-                        mention_author=True,
-                        content=f'**What will your mirage show? Observe.** \n'
-                                f'`id: {mirage_path}`\n'
-                                f'`seed: {options["seed"]}`\n'
-                                f'`repro: {repro_str}`\n'
-                    )
-
-                    await status_message.delete()
-                    await websocket.close()
-                    break
-
-        except Exception as e:
-            await ctx.message.reply(f'Error: {e}')
-            raise e
-
-    async def update_generative_task_metrics(self,
-                                             metric_record_count_key,
-                                             metric_avg_seconds_per_step_key,
-                                             avg_seconds_per_step,
-                                             generation_seconds_per_step):
-        mirage_record_count = self.redis.get(metric_record_count_key)
-        if mirage_record_count is None:
-            mirage_record_count = 0
-        else:
-            mirage_record_count = int(mirage_record_count)
-        mirage_record_count += 1
-        self.redis.set(metric_record_count_key, mirage_record_count)
-        sma_existing_record_section = (avg_seconds_per_step * (mirage_record_count - 1)) / mirage_record_count
-        sma_existing_record_section += generation_seconds_per_step / mirage_record_count
-        sma_existing_record_section /= mirage_record_count
-        self.redis.set(metric_avg_seconds_per_step_key, sma_existing_record_section)
-
-    async def create_progress_indicator_task(self,
-                                             status_message,
-                                             status_message_content,
-                                             avg_seconds_key,
-                                             steps):
-        avg_seconds_per_step, formatted_time = self.calc_formatted_avg_duration(avg_seconds_key, steps)
-
-        progress_indicator = asyncio.create_task(DiscordBot.in_progress_indicator_task(
-            status_message=status_message,
-            status_message_content=f'{status_message_content} Average time: {formatted_time}',
-            token_sequence='⣷⣯⣟⡿⢿⣻⣽⣾⣽⣻⢿⡿⣟⣯',
-            frame_duration=0.4,
-            are_tokens_cumulative=False
-        ))
-
-        # token_sequence = '⣾⣿' '⣽⣿' '⣻⣿' '⢿⣿' '⡿⣿' '⣿⢿' '⣿⡿' '⣿⡿' '⣿⣟' '⣿⣯' '⣿⣷' '⣿⣾' '⣷⣿' \
-        #                  '⣯⣿' '⣟⣿' '⣿⣻' '⣿⣽'
-
-        return avg_seconds_per_step, progress_indicator
+    # async def create_progress_indicator_task(self,
+    #                                         status_message,
+    #                                         status_message_content,
+    #                                         avg_seconds_key,
+    #                                         steps):
+    #    avg_seconds_per_step, formatted_time = self.calc_formatted_avg_duration(avg_seconds_key, steps)
+    #
+    #    progress_indicator = asyncio.create_task(DiscordBot.in_progress_indicator_task(
+    #        status_message=status_message,
+    #        status_message_content=f'{status_message_content} Average time: {formatted_time}',
+    #        token_sequence='⣷⣯⣟⡿⢿⣻⣽⣾⣽⣻⢿⡿⣟⣯',
+    #        frame_duration=0.4,
+    #        are_tokens_cumulative=False
+    #    ))
+    #
+    #    # token_sequence = '⣾⣿' '⣽⣿' '⣻⣿' '⢿⣿' '⡿⣿' '⣿⢿' '⣿⡿' '⣿⡿' '⣿⣟' '⣿⣯' '⣿⣷' '⣿⣾' '⣷⣿' \
+    #    #                  '⣯⣿' '⣟⣿' '⣿⣻' '⣿⣽'
+    #
+    #    return avg_seconds_per_step, progress_indicator
 
     async def mark_message_processing_complete(self, message):
         await message.remove_reaction('⏳', self.bot.user)

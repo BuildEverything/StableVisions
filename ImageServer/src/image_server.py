@@ -90,7 +90,7 @@ class ImageServer:
     def save_generated_image(self, generated_image, actor_dir):
         filename = f"{datetime.datetime.utcnow().isoformat()}-{str(uuid.uuid4())}.png"
         image_path = os.path.join(actor_dir, filename)
-        logging.debug("Saving image: ", image_path)
+        logging.debug("Saving image: %s", image_path)
         generated_image.save(image_path)
         return image_path
 

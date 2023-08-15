@@ -1,5 +1,4 @@
 discord.py==2.3.1
-disco-py
 websockets==11.0.3
 openai==0.27.8
 json-modify==1.0.1
@@ -11,3 +10,4 @@ boto3
 alive-progress
 tqdm
 redis
+python-ffmpeg

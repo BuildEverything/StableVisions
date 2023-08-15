@@ -25,6 +25,7 @@ DiscordBot/enchantus-service-account-creds.json
 DiscordBot/local-service-account-creds.json
 DiscordBot/prod-service-account-creds.json
 DiscordBot/token.json
+DiscordBot/ffmpeg2pass-*.log
 
 # IDE files
 .idea/

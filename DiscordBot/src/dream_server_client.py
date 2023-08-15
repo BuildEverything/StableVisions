@@ -9,7 +9,7 @@ class DreamServerClient(ContentServerClient):
 
     async def handle_progress_update(self, data):
         # progress_percentage = float(data['percentage'])
-        # await status_message.edit(content=f'Dream generation progress: {progress_percentage:.2f}%')
+        # await status_message.edit(content=f'{self.server_type} generation progress: {progress_percentage:.2f}%')
         pass
 
     async def handle_generation_complete(self, data):
